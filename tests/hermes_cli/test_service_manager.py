@@ -273,6 +273,7 @@ def test_render_run_script_uses_replace_to_take_over_stale_holder() -> None:
     render paths.
     """
     default_text = S6ServiceManager._render_run_script("default", {})
+    assert "export PYTHONDONTWRITEBYTECODE=1" in default_text
     # Root profile: bare `hermes gateway run --replace` (no -p flag).
     assert "hermes gateway run --replace" in default_text
     assert "hermes -p default" not in default_text
@@ -530,5 +531,4 @@ def test_s6_log_run_never_invokes_chown_with_symlinked_log_dir(tmp_path) -> None
     assert after.st_gid == before.st_gid
     assert (victim / "marker").read_text(encoding="utf-8") == "keep"
     assert (victim / "lock").read_text(encoding="utf-8") == "keep-lock"
-
 

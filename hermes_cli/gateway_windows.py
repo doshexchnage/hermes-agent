@@ -51,7 +51,12 @@ _TASK_LOGON_DELAY = "PT30S"
 _TASK_RESTART_INTERVAL = "PT1M"
 _TASK_RESTART_COUNT = 999
 
-_GATEWAY_ENV = (("PYTHONIOENCODING", "utf-8"), ("HERMES_GATEWAY_DETACHED", "1"), ("HERMES_SUPERVISED_CHILD", "1"))
+_GATEWAY_ENV = (
+    ("PYTHONIOENCODING", "utf-8"),
+    ("HERMES_GATEWAY_DETACHED", "1"),
+    ("HERMES_SUPERVISED_CHILD", "1"),
+    ("PYTHONDONTWRITEBYTECODE", "1"),
+)
 
 
 def _schtasks_encoding() -> str:
@@ -610,7 +615,10 @@ def windowless_gateway_restart_spec(run_argv: list[str]) -> tuple[list[str], str
         hermes_home = str(_hermes_home().resolve())
     except Exception:
         hermes_home = ""
-    env_overlay: dict[str, str] = {"PYTHONIOENCODING": "utf-8", "HERMES_GATEWAY_DETACHED": "1", "VIRTUAL_ENV": str(venv_dir)}
+    env_overlay: dict[str, str] = {
+        **dict(_GATEWAY_ENV),
+        "VIRTUAL_ENV": str(venv_dir),
+    }
     if hermes_home:
         env_overlay["HERMES_HOME"] = hermes_home
     _prepend_pythonpath(env_overlay, [str(PROJECT_ROOT), *extra_pythonpath])

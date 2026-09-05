@@ -584,11 +584,17 @@ class TestActiveVenvMarkerStripping:
 
     def test_sanitize_subprocess_env_strips_markers(self):
         from tools.environments.local import _sanitize_subprocess_env
-        base = {"VIRTUAL_ENV": "/venv", "CONDA_PREFIX": "/conda", "HOME": "/home/user"}
+        base = {
+            "VIRTUAL_ENV": "/venv",
+            "CONDA_PREFIX": "/conda",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HOME": "/home/user",
+        }
         # Even an explicitly-passed extra marker is stripped.
         result = _sanitize_subprocess_env(base, {"VIRTUAL_ENV": "/also/venv"})
         assert "VIRTUAL_ENV" not in result
         assert "CONDA_PREFIX" not in result
+        assert "PYTHONDONTWRITEBYTECODE" not in result
         assert result.get("HOME") == "/home/user"
 
     def test_markers_constant_contents(self):

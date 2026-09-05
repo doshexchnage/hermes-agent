@@ -2809,6 +2809,7 @@ WorkingDirectory={working_dir}
 Environment="VIRTUAL_ENV={venv_dir}"
 Environment="HERMES_HOME={hermes_home}"
 Environment="HERMES_SUPERVISED_CHILD=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
 Restart=always
 RestartSec=5
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
@@ -3690,6 +3691,8 @@ def generate_launchd_plist() -> str:
         <key>HERMES_HOME</key>
         <string>{hermes_home}</string>
         <key>HERMES_SUPERVISED_CHILD</key>
+        <string>1</string>
+        <key>PYTHONDONTWRITEBYTECODE</key>
         <string>1</string>
     </dict>
 
