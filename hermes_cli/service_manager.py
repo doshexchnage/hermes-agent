@@ -437,6 +437,7 @@ class S6ServiceManager:
         # Generalized supervisor marker — same meaning for the profile-redirect guard in
         # hermes_cli.main._apply_profile_override; kept alongside the s6 one for back-compat.
         lines.append("export HERMES_SUPERVISED_CHILD=1")
+        lines.append("export PYTHONDONTWRITEBYTECODE=1")
         # ``--replace`` makes the supervised gateway authoritative for its HERMES_HOME. Without it
         # a gateway started OUTSIDE s6 (stray ``hermes gateway run``, an agent action, the Open
         # WebUI helper) grabs the PID lock first; the slot then hits "Another gateway instance is

@@ -12,6 +12,8 @@ active_profile (child-process inheritance contract).
 from __future__ import annotations
 
 import os
+import plistlib
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -276,6 +278,7 @@ class TestGeneralizedSupervisorMarkers:
 
         unit = generate_systemd_unit()
         assert 'Environment="HERMES_SUPERVISED_CHILD=1"' in unit
+        assert 'Environment="PYTHONDONTWRITEBYTECODE=1"' in unit
 
     def test_generated_launchd_plist_exports_supervised_marker(
         self, tmp_path, monkeypatch
@@ -286,3 +289,39 @@ class TestGeneralizedSupervisorMarkers:
 
         plist = generate_launchd_plist()
         assert "<key>HERMES_SUPERVISED_CHILD</key>" in plist
+        assert "<key>PYTHONDONTWRITEBYTECODE</key>" in plist
+
+    def test_launchd_supervisor_environment_prevents_bytecode_rewrites(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        (tmp_path / "home").mkdir()
+        from hermes_cli.gateway import generate_launchd_plist
+
+        supervisor_environment = plistlib.loads(
+            generate_launchd_plist().encode("utf-8")
+        )["EnvironmentVariables"]
+        module = tmp_path / "supervised_module.py"
+        module.write_text("value = 1\n", encoding="utf-8")
+        environment = {**os.environ, **supervisor_environment}
+
+        subprocess.run(
+            [sys.executable, "-m", "compileall", "-q", "-f", str(tmp_path)],
+            env=environment,
+            check=True,
+        )
+        bytecode = next((tmp_path / "__pycache__").glob("supervised_module.*.pyc"))
+        compiled = bytecode.read_bytes()
+        module.write_text("value = 200\n", encoding="utf-8")
+
+        imported = subprocess.run(
+            [sys.executable, "-c", "import supervised_module; print(supervised_module.value)"],
+            cwd=tmp_path,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert imported.stdout.strip() == "200"
+        assert bytecode.read_bytes() == compiled

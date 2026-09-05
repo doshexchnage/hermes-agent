@@ -271,6 +271,7 @@ def _finalize_child_env(env: dict) -> dict:
     _apply_profile_home(env)
     _inject_session_context_env(env)
     _strip_hermes_owned_pythonpath_and_runtime_markers(env)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
     _apply_windows_msys_bash_env_defaults(env)
     try:  # strip dispatcher-owned Kanban env from delegate_task child subprocesses
         from agent.delegation_context import is_delegated_child_process_context, scrub_kanban_env
