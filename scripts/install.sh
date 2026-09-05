@@ -43,8 +43,6 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
@@ -76,6 +74,7 @@ BRANCH="main"
 INSTALL_COMMIT=""
 FORCE_COMMIT=false
 ENSURE_DEPS=""
+REPO_SLUG="NousResearch/hermes-agent"
 
 MANIFEST_MODE=false
 STAGE_NAME=""
@@ -126,6 +125,10 @@ while [[ $# -gt 0 ]]; do
         --force-commit|-ForceCommit)
             FORCE_COMMIT=true
             shift
+            ;;
+        --repository|-Repository)
+            REPO_SLUG="$2"
+            shift 2
             ;;
         --manifest|-Manifest)
             MANIFEST_MODE=true
@@ -178,6 +181,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --commit SHA   Pin checkout to a specific commit after clone/update"
             echo "                   (ignored when it would roll an existing install back)"
             echo "  --force-commit Apply --commit even if it rolls the install backwards"
+            echo "  --repository OWNER/REPO  Explicit GitHub source (default: NousResearch/hermes-agent)"
             echo "  --manifest     Print desktop bootstrap stage manifest as JSON"
             echo "  --stage NAME   Run one desktop bootstrap stage"
             echo "  --json         Print a JSON result frame for --stage"
@@ -209,6 +213,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if ! printf '%s' "$REPO_SLUG" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+    echo "Invalid --repository: expected owner/repository" >&2
+    exit 1
+fi
+REPO_URL_SSH="git@github.com:${REPO_SLUG}.git"
+REPO_URL_HTTPS="https://github.com/${REPO_SLUG}.git"
 
 # ============================================================================
 # Helper functions
@@ -1488,6 +1499,7 @@ clone_repo() {
         if [ -d "$INSTALL_DIR/.git" ]; then
             log_info "Existing installation found, updating..."
             cd "$INSTALL_DIR"
+            git remote set-url origin "$REPO_URL_HTTPS"
 
             local autostash_ref=""
             discard_update_lockfile_churn "$INSTALL_DIR"

@@ -13,6 +13,7 @@ from gateway.platforms import api_server_runs
 
 _HTTP_HANDLER_DELEGATES = (
     ("_handle_get_run", "_handle_get_run"),
+    ("_handle_get_run_by_idempotency_key", "_handle_get_run_by_idempotency_key"),
     ("_handle_run_events", "_handle_run_events"),
     ("_handle_run_approval", "_handle_run_approval"),
     ("_handle_steer_run", "_handle_steer_run"),
@@ -172,6 +173,7 @@ def test_roomlink_and_run_route_tuples_are_shard_owned():
     ]
     assert [(method, path) for method, path, _ in run_routes] == [
         ("POST", "/v1/runs"),
+        ("GET", "/v1/runs/by-idempotency-key"),
         ("GET", "/v1/runs/{run_id}"),
         ("GET", "/v1/runs/{run_id}/events"),
         ("POST", "/v1/runs/{run_id}/approval"),

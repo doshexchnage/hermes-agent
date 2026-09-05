@@ -70,6 +70,54 @@ def _run_not_found(_openai_error, run_id: str) -> "web.Response":
     return _json_error(_openai_error, f"Run not found: {run_id}", code="run_not_found", status=404)
 
 
+async def _handle_get_run_by_idempotency_key(
+    self, request: "web.Request", *, _api_server
+) -> "web.Response":
+    """Recover one idempotent run without placing its key in the URL or response."""
+    auth_error = _check_run_auth(self, request, permission="status", _api_server=_api_server)
+    if auth_error is not None:
+        return auth_error
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key or len(key) > 255 or any(ord(ch) < 33 or ord(ch) > 126 for ch in key):
+        response = _json_error(
+            _api_server._openai_error,
+            "Idempotency-Key must be 1-255 visible ASCII characters",
+            code="invalid_idempotency_key",
+            status=400,
+        )
+        response.headers.update({
+            "Cache-Control": "no-store",
+            "Vary": "Authorization, Idempotency-Key",
+        })
+        return response
+    record = self._run_idempotency_store.lookup_by_key(
+        self._run_idempotency_scope(request),
+        key,
+        retention_until=_room_retention_until(request),
+    )
+    if record is None:
+        response = _json_error(
+            _api_server._openai_error,
+            "Run not found for Idempotency-Key",
+            code="run_not_found",
+            status=404,
+        )
+        response.headers.update({
+            "Cache-Control": "no-store",
+            "Vary": "Authorization, Idempotency-Key",
+        })
+        return response
+    run_id = str(record["run_id"])
+    status = self._durable_run_status(request, run_id) or record["status"]
+    return web.json_response(
+        {"run_id": run_id, "status": status.get("status", "queued")},
+        headers={
+            "Cache-Control": "no-store",
+            "Vary": "Authorization, Idempotency-Key",
+        },
+    )
+
+
 def _uses_room_run_auth(self, request: "web.Request") -> bool:
     return request.path.endswith("/v1/runs") and bool(self._room_grant_token(request))
 
@@ -98,7 +146,9 @@ def _initialize_run_state(self, *, store_factory) -> None:
 
 def _http_routes(self) -> list[tuple[str, str, Any]]:
     return [
-        ("POST", "/v1/runs", self._handle_runs), ("GET", "/v1/runs/{run_id}", self._handle_get_run),
+        ("POST", "/v1/runs", self._handle_runs),
+        ("GET", "/v1/runs/by-idempotency-key", self._handle_get_run_by_idempotency_key),
+        ("GET", "/v1/runs/{run_id}", self._handle_get_run),
         ("GET", "/v1/runs/{run_id}/events", self._handle_run_events),
         ("POST", "/v1/runs/{run_id}/approval", self._handle_run_approval),
         ("POST", "/v1/runs/{run_id}/steer", self._handle_steer_run),

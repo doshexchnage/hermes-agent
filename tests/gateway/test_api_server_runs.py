@@ -99,6 +99,10 @@ def _create_runs_app(adapter: APIServerAdapter) -> web.Application:
         "/v1/room-members/grants/revoke",
         adapter._handle_room_member_grant_revoke,
     )
+    app.router.add_get(
+        "/v1/runs/by-idempotency-key",
+        adapter._handle_get_run_by_idempotency_key,
+    )
     app.router.add_get("/v1/runs/{run_id}", adapter._handle_get_run)
     app.router.add_get("/v1/runs/{run_id}/events", adapter._handle_run_events)
     app.router.add_post("/v1/runs/{run_id}/approval", adapter._handle_run_approval)
@@ -968,6 +972,44 @@ def _use_idempotency_db(adapter, path):
 
 class TestRunIdempotency:
     @pytest.mark.asyncio
+    async def test_recovers_reserved_run_by_header_key_without_echoing_key(
+        self, adapter, tmp_path
+    ):
+        _use_idempotency_db(adapter, tmp_path / "idem.db")
+        app = _create_runs_app(adapter)
+        headers = {"Idempotency-Key": "recover-without-url-secret"}
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_create_agent") as create:
+                agent = MagicMock()
+                agent.run_conversation.return_value = {"final_response": "done"}
+                agent.session_prompt_tokens = agent.session_completion_tokens = (
+                    agent.session_total_tokens
+                ) = 0
+                create.return_value = agent
+                accepted = await cli.post(
+                    "/v1/runs", json={"input": "valid"}, headers=headers
+                )
+                accepted_body = await accepted.json()
+                recovered = await cli.get(
+                    "/v1/runs/by-idempotency-key", headers=headers
+                )
+                recovered_body = await recovered.json()
+                missing = await cli.get(
+                    "/v1/runs/by-idempotency-key",
+                    headers={"Idempotency-Key": "different-key"},
+                )
+
+        assert accepted.status == 202
+        assert recovered.status == 200
+        assert recovered.headers["Cache-Control"] == "no-store"
+        assert "Idempotency-Key" in recovered.headers["Vary"]
+        assert recovered_body["run_id"] == accepted_body["run_id"]
+        assert "idempotency_key" not in recovered_body
+        assert missing.status == 404
+        assert missing.headers["Cache-Control"] == "no-store"
+        assert "Idempotency-Key" in missing.headers["Vary"]
+
+    @pytest.mark.asyncio
     async def test_invalid_body_does_not_consume_idempotency_key(
         self, adapter, tmp_path
     ):
@@ -1241,6 +1283,28 @@ class TestRunIdempotency:
             "room:task-1:1",
             "room-fingerprint",
         ) == ("missing", None)
+        store.close()
+
+    def test_key_lookup_extends_a_terminal_receipt_before_pruning(self, tmp_path, monkeypatch):
+        from gateway.platforms import api_server_run_idempotency as idempotency
+
+        now = [100.0]
+        monkeypatch.setattr(idempotency.time, "time", lambda: now[0])
+        store = idempotency.RunIdempotencyStore(str(tmp_path / "idem.db"))
+        assert store.reserve(
+            "room-scope",
+            "room-key",
+            "fingerprint",
+            "run-room",
+            {"run_id": "run-room", "status": "completed"},
+            retention_until=200,
+        )[0] == "created"
+
+        now[0] = 201
+        record = store.lookup_by_key("room-scope", "room-key", retention_until=300)
+
+        assert record is not None
+        assert record["run_id"] == "run-room"
         store.close()
 
     @pytest.mark.asyncio
