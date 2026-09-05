@@ -164,6 +164,22 @@ class RunIdempotencyStore:
             self._conn.commit()
         return ("missing", None) if row is None else _outcome(row, fingerprint)
 
+    def lookup_by_key(self, scope: str, key: str, *, retention_until: float = 0) -> dict[str, Any] | None:
+        """Recover a reservation inside its authenticated scope without replaying its request body."""
+        now = time.time()
+        checked_until = max(0.0, float(retention_until or 0))
+        with self._immediate_txn():
+            if checked_until:
+                self._conn.execute(
+                    "UPDATE run_idempotency SET retention_until=MAX(retention_until, ?) "
+                    "WHERE scope=? AND idempotency_key=?",
+                    (checked_until, scope, key),
+                )
+            self._prune_stale_terminal_locked(now)
+            row = self._conn.execute(_SELECT_BY_KEY, (scope, key)).fetchone()
+            self._conn.commit()
+        return None if row is None else _record(*row[1:])
+
     def _prune_stale_terminal_locked(self, now: float) -> None:
         """Prune aged replay records only once their stored run is terminal (caller holds the
         lock + transaction): a long or disconnected room turn may outlive the retention window."""

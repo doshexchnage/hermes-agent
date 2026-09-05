@@ -874,6 +874,7 @@ class TestCapabilitiesEndpoint:
             assert "API-server host" in data["runtime"]["description"]
             assert data["features"]["chat_completions"] is True
             assert data["features"]["run_status"] is True
+            assert data["features"]["run_idempotency_recovery"] is True
             assert data["features"]["run_events_sse"] is True
             assert data["features"]["runs_idempotency"] == {
                 "supported": True,
@@ -883,6 +884,10 @@ class TestCapabilitiesEndpoint:
             assert data["features"]["model_options"] is True
             assert data["features"]["session_continuity_header"] == "X-Hermes-Session-Id"
             assert data["endpoints"]["run_status"]["path"] == "/v1/runs/{run_id}"
+            assert data["endpoints"]["run_by_idempotency_key"] == {
+                "method": "GET",
+                "path": "/v1/runs/by-idempotency-key",
+            }
             assert data["endpoints"]["model_options"] == {"method": "GET", "path": "/api/model/options"}
             assert data["endpoints"]["skills"] == {"method": "GET", "path": "/v1/skills"}
             assert data["endpoints"]["toolsets"] == {"method": "GET", "path": "/v1/toolsets"}

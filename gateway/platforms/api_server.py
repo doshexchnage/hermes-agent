@@ -65,7 +65,7 @@ _BROWSER_CONTROL_PROTOCOL_VERSION = 1
 
 # /v1/capabilities static feature flags (order is part of the JSON shape).
 _STATIC_FEATURE_FLAGS = {
-    "run_status": True, "run_events_sse": True, "run_stop": True, "run_steer": True,
+    "run_status": True, "run_idempotency_recovery": True, "run_events_sse": True, "run_stop": True, "run_steer": True,
     "run_approval_response": True, "tool_progress_events": True, "approval_events": True,
     "session_resources": True, "model_options": True, "session_chat": True,
     "session_chat_streaming": True, "session_fork": True, "session_model_lock": True,
@@ -79,6 +79,7 @@ _CAPABILITY_ENDPOINTS = (
     ("models", ("GET", "/v1/models")), ("model_options", ("GET", "/api/model/options")),
     ("chat_completions", ("POST", "/v1/chat/completions")),
     ("responses", ("POST", "/v1/responses")), ("runs", ("POST", "/v1/runs")),
+    ("run_by_idempotency_key", ("GET", "/v1/runs/by-idempotency-key")),
     ("run_status", ("GET", "/v1/runs/{run_id}")),
     ("run_events", ("GET", "/v1/runs/{run_id}/events")),
     ("run_approval", ("POST", "/v1/runs/{run_id}/approval")),
@@ -3769,6 +3770,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         _api_runs._release_run_owner_if_forgotten(self, run_id)
 
     _handle_get_run = _run_route_delegate("_handle_get_run")
+    _handle_get_run_by_idempotency_key = _run_route_delegate("_handle_get_run_by_idempotency_key")
     _handle_run_events = _run_route_delegate("_handle_run_events")
     _handle_run_approval = _run_route_delegate("_handle_run_approval")
     _handle_steer_run = _run_route_delegate("_handle_steer_run")
