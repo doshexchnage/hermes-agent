@@ -99,8 +99,8 @@ class InterruptControlMixin:
         ``hard_cancel``: explicit stop; compression may honor it even while ordinary interrupts are masked.
         ``tool_reason``: trusted fixed category safe for tool output. ``require_generation``: activity-
         generation claim — published only if the turn's generation still matches at the final mutation edge;
-        returns False if the turn resumed meanwhile. ``unless_interrupted`` leaves an existing
-        external stop or redirect untouched when a deadline arrives.
+        returns False if the turn resumed meanwhile. ``unless_interrupted`` preserves an existing
+        stop; a pending redirect can still be superseded by the same turn's hard deadline.
         """
         if require_generation is not None:
             # RESERVE the claim under the SAME lock `_touch_activity` stamps with; real progress invalidates
@@ -133,7 +133,10 @@ class InterruptControlMixin:
         # claim edge (redirect lock still held); the destructive pending-commit cancel runs AFTER the claim
         # survives (#99758 P1).
         with _ic_lock(self, "_pending_redirect_lock"):
-            if unless_interrupted and self._interrupt_requested:
+            if (
+                unless_interrupted and self._interrupt_requested
+                and not _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
+            ):
                 return False
             _fence_cancel_before_commit(
                 _fence(), when_in_flight=True, failure_log="Compression hard-cancel fence wait failed"

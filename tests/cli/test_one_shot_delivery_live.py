@@ -214,3 +214,56 @@ db.close()
     if scenario == 'late-finalizer':
         assert any(m.get('content') == 'Return the accepted answer again.'
                    for body in observations for m in body['messages'] if m['role'] == 'user')
+
+
+def test_redirect_cannot_resume_inference_after_run_deadline(tmp_path):
+    home = tmp_path / 'home'
+    home.mkdir()
+    script = r'''
+import threading, sys, time
+from run_agent import AIAgent
+agent = AIAgent(api_key='fixture-not-a-secret', provider='custom', base_url=sys.argv[1],
+    model='fixture-worker', enabled_toolsets=[], quiet_mode=True, skip_context_files=True,
+    skip_memory=True, skip_background_review=True, max_iterations=3)
+agent.run_budget_seconds = 0.4
+expired = threading.Event()
+original_interrupt = agent.interrupt
+original_clear = agent.clear_interrupt
+def observed_interrupt(*a, **kw):
+    result = original_interrupt(*a, **kw)
+    if kw.get('unless_interrupted'):
+        print('DEADLINE_INTERRUPT_ACCEPTED', result, flush=True)
+        expired.set()
+    return result
+def delayed_clear(*a, **kw):
+    if kw.get('preserve_redirect'):
+        assert expired.wait(3), 'deadline never arrived while redirect was pending'
+    return original_clear(*a, **kw)
+agent.interrupt = observed_interrupt
+agent.clear_interrupt = delayed_clear
+def steer():
+    assert agent._model_request_active.wait(3)
+    time.sleep(0.1)
+    assert agent.redirect('Continue using the correction')
+rescued = threading.Event()
+def rescue():
+    assert expired.wait(3)
+    time.sleep(1.0)
+    rescued.set()
+    original_interrupt('test rescue stop', hard_cancel=True)
+threading.Thread(target=steer, daemon=True).start()
+threading.Thread(target=rescue, daemon=True).start()
+result = agent.run_conversation('Keep working')
+assert not rescued.is_set(), 'expired deadline needed a second stop to settle the turn'
+assert result.get('failure_reason') == 'run_budget_exhausted', result
+assert result.get('turn_exit_reason') == 'run_budget_exhausted', result
+assert result.get('failed') and not result.get('completed'), result
+agent.close()
+'''
+    with provider_fixture('busy') as (url, observations, cancelled):
+        env = {'PATH': os.environ['PATH'], 'HOME': str(tmp_path), 'HERMES_HOME': str(home),
+               'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}
+        result = subprocess.run([sys.executable, '-c', script, url], cwd=tmp_path, env=env,
+                                text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(observations) == 1, f'Inference resumed after expired deadline: {len(observations)} HTTP requests\n{result.stdout}\n{result.stderr}'
