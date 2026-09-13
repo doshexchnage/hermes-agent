@@ -314,7 +314,7 @@ def _normalize_run_budget_seconds(value) -> Optional[float]:
         seconds = float(value)
     except (TypeError, ValueError):
         return None
-    return seconds if seconds > 0 else None  # NaN compares False → None
+    return seconds if 0 < seconds < float("inf") else None
 
 
 def _refuse_checkpoint_required_on_codex_app_server(

@@ -4453,6 +4453,10 @@ def _run_single_query_mode(cli, query, image, quiet, oneshot):
         cli._show_security_advisories()
         cli.chat(query, images=single_query_images or None)
         cli._print_exit_summary(clear_screen=False)
+        if getattr(cli, "_last_turn_failed", False):
+            sys.exit(1)
+        if getattr(cli, "_last_turn_interrupted", False):
+            sys.exit(130)
     finally:
         _finalize_single_query(cli)
 

@@ -1467,6 +1467,12 @@ def run_conversation(
         max_compression_attempts=getattr(agent, "max_compression_attempts", 3),
         **{f.name: getattr(_ctx, f.name.lstrip("_")) for f in fields(_LoopState) if f.name in _CTX_FIELDS},
     )
+    from agent.run_deadline import run_with_deadline
+
+    return run_with_deadline(agent, lambda: _run_prepared_turn(agent, s))
+
+
+def _run_prepared_turn(agent, s):
     # Opt-in runtime: api_mode == codex_app_server hands the whole turn to the codex
     # app-server subprocess (see agent/transports/codex_app_server_session.py).
     if agent.api_mode == "codex_app_server":
