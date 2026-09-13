@@ -135,3 +135,82 @@ def test_budget_cancels_active_provider_and_child_streams(tmp_path, mode, quiet)
     assert elapsed < 12
     if mode == 'busy-child':
         assert any(body['model'] == 'fixture-worker' for body in observations)
+
+
+@pytest.mark.parametrize('scenario', ['late-finalizer', 'late-child', 'late-external-stop', 'early-external-stop'])
+def test_deadline_turn_boundaries(tmp_path, scenario):
+    """Real agents and HTTP transport; pause only at the two cancellation race boundaries."""
+    home = tmp_path / 'home'
+    home.mkdir()
+    import yaml
+    with provider_fixture('handoff') as (url, observations, _):
+        (home / 'config.yaml').write_text(yaml.safe_dump({
+            'delegation': {'model': 'fixture-worker', 'provider': 'custom', 'base_url': url,
+                           'api_key': 'fixture-not-a-secret', 'max_iterations': 2},
+        }))
+        script = r'''
+import sys, threading, time
+from run_agent import AIAgent
+from hermes_state import SessionDB
+from pathlib import Path
+from tools import delegate_tool
+from tools.interrupt import is_interrupted
+url, scenario, home = sys.argv[1:]
+db = SessionDB(Path(home) / 'state.db')
+agent = AIAgent(api_key='fixture-not-a-secret', provider='custom', base_url=url,
+    model='fixture-worker' if scenario != 'late-child' else 'fixture-lead',
+    enabled_toolsets=[] if scenario != 'late-child' else ['delegation'],
+    quiet_mode=True, skip_context_files=True, skip_memory=True, skip_background_review=True,
+    max_iterations=3, session_db=db)
+agent.run_budget_seconds = 0.3
+expired = threading.Event()
+original_interrupt = agent.interrupt
+def observed_interrupt(*args, **kwargs):
+    result = original_interrupt(*args, **kwargs)
+    expired.set()
+    return result
+agent.interrupt = observed_interrupt
+if scenario == 'late-child':
+    attach = delegate_tool._attach_child
+    def delayed_attach(parent, child):
+        assert expired.wait(3), 'deadline never fired before attachment'
+        attach(parent, child)
+    delegate_tool._attach_child = delayed_attach
+else:
+    sync = agent._sync_external_memory_for_turn
+    def delayed_sync(**kwargs):
+        assert not agent._interrupt_requested, 'did not reach post-clear finalization'
+        if scenario == 'early-external-stop':
+            original_interrupt('user stop', hard_cancel=True)
+        assert expired.wait(3), 'deadline never fired in finalization'
+        if scenario == 'late-external-stop':
+            agent.interrupt('user stop', hard_cancel=True)
+    agent._sync_external_memory_for_turn = delayed_sync
+result = agent.run_conversation('Return the accepted answer; delegate if available.')
+assert result['failed'] and result['failure_reason'] == 'run_budget_exhausted', result
+assert result['turn_exit_reason'] == 'run_budget_exhausted', result
+if scenario in ('late-external-stop', 'early-external-stop'):
+    assert agent._interrupt_requested and agent._interrupt_message == 'user stop'
+else:
+    assert not agent._interrupt_requested, 'deadline interrupt leaked into cached next turn'
+    assert not agent._hard_interrupt_requested.is_set()
+    assert not is_interrupted()
+    if scenario == 'late-finalizer':
+        agent._sync_external_memory_for_turn = sync
+        agent.run_budget_seconds = None
+        second = agent.run_conversation('Return the accepted answer again.')
+        assert second['completed'] and second['final_response'] == 'CHILD_ACCEPTED', second
+agent.clear_interrupt()
+agent.close()
+db.close()
+'''
+        env = {'PATH': os.environ['PATH'], 'HOME': str(tmp_path), 'HERMES_HOME': str(home),
+               'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}
+        result = subprocess.run([sys.executable, '-c', script, url, scenario, str(home)],
+                                cwd=tmp_path, env=env, text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if scenario == 'late-child':
+        assert not any(body['model'] == 'fixture-worker' for body in observations), 'cancelled child started inference'
+    if scenario == 'late-finalizer':
+        assert any(m.get('content') == 'Return the accepted answer again.'
+                   for body in observations for m in body['messages'] if m['role'] == 'user')

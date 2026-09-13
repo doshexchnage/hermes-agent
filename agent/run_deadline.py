@@ -16,7 +16,8 @@ def run_with_deadline(agent, operation: Callable[[], dict]) -> dict:
     lock = threading.Lock()
     finished = False
     expired = False
-    message = "Run time budget exhausted; active work was interrupted."
+    # A fresh string identity distinguishes this timer from external interrupt publications.
+    message = " ".join(("Run time budget exhausted;", "active work was interrupted."))
 
     def expire():
         nonlocal expired
@@ -25,7 +26,8 @@ def run_with_deadline(agent, operation: Callable[[], dict]) -> dict:
             if finished:
                 return
             expired = True
-            agent.interrupt(message, hard_cancel=True, tool_reason="run time budget exhausted")
+            agent.interrupt(message, hard_cancel=True, tool_reason="run time budget exhausted",
+                            unless_interrupted=True)
 
     started = getattr(agent, "_run_budget_started_at", None)
     elapsed = max(0.0, time.time() - started) if isinstance(started, (int, float)) else 0.0
@@ -39,8 +41,13 @@ def run_with_deadline(agent, operation: Callable[[], dict]) -> dict:
             finished = True
         timer.cancel()
         timer.join()
+        if expired:
+            clear = getattr(agent, "clear_interrupt", None)
+            if callable(clear):
+                clear(expected_message=message)
 
     if expired:
         result.update(completed=False, failed=True, interrupted=True,
-                      failure_reason="run_budget_exhausted", error=message, final_response=message)
+                      failure_reason="run_budget_exhausted", turn_exit_reason="run_budget_exhausted",
+                      error=message, final_response=message)
     return result
