@@ -165,11 +165,14 @@ agent = AIAgent(api_key='fixture-not-a-secret', provider='custom', base_url=url,
 agent.run_budget_seconds = 0.3
 expired = threading.Event()
 original_interrupt = agent.interrupt
-def observed_interrupt(*args, **kwargs):
-    result = original_interrupt(*args, **kwargs)
-    expired.set()
+from agent.interrupt_control import InterruptControlMixin
+original_control_interrupt = InterruptControlMixin.interrupt
+def observed_interrupt(target, *args, **kwargs):
+    result = original_control_interrupt(target, *args, **kwargs)
+    if target is agent and kwargs.get('unless_interrupted'):
+        expired.set()
     return result
-agent.interrupt = observed_interrupt
+InterruptControlMixin.interrupt = observed_interrupt
 if scenario == 'late-child':
     attach = delegate_tool._attach_child
     def delayed_attach(parent, child):
@@ -229,9 +232,11 @@ agent.run_budget_seconds = 0.4
 expired = threading.Event()
 original_interrupt = agent.interrupt
 original_clear = agent.clear_interrupt
-def observed_interrupt(*a, **kw):
-    result = original_interrupt(*a, **kw)
-    if kw.get('unless_interrupted'):
+from agent.interrupt_control import InterruptControlMixin
+original_control_interrupt = InterruptControlMixin.interrupt
+def observed_interrupt(target, *a, **kw):
+    result = original_control_interrupt(target, *a, **kw)
+    if target is agent and kw.get('unless_interrupted'):
         print('DEADLINE_INTERRUPT_ACCEPTED', result, flush=True)
         expired.set()
     return result
@@ -239,7 +244,7 @@ def delayed_clear(*a, **kw):
     if kw.get('preserve_redirect'):
         assert expired.wait(3), 'deadline never arrived while redirect was pending'
     return original_clear(*a, **kw)
-agent.interrupt = observed_interrupt
+InterruptControlMixin.interrupt = observed_interrupt
 agent.clear_interrupt = delayed_clear
 def steer():
     assert agent._model_request_active.wait(3)
@@ -267,3 +272,44 @@ agent.close()
                                 text=True, capture_output=True, timeout=12)
     assert result.returncode == 0, result.stdout + result.stderr
     assert len(observations) == 1, f'Inference resumed after expired deadline: {len(observations)} HTTP requests\n{result.stdout}\n{result.stderr}'
+
+
+def test_deadline_cancels_legacy_agent_override(tmp_path):
+    home = tmp_path / 'home'
+    home.mkdir()
+    script = r'''
+import threading, sys
+from run_agent import AIAgent
+class LegacyAgent(AIAgent):
+    def interrupt(self, message=None):
+        raise AssertionError('deadline dispatched through the legacy override')
+    def clear_interrupt(self):
+        return super().clear_interrupt()
+agent = LegacyAgent(api_key='fixture-not-a-secret', provider='custom', base_url=sys.argv[1],
+    model='fixture-worker', enabled_toolsets=[], quiet_mode=True, skip_context_files=True,
+    skip_memory=True, skip_background_review=True, max_iterations=3, run_budget_seconds=0.3)
+rescued = threading.Event()
+def rescue():
+    rescued.set()
+    agent.hard_interrupt('test rescue stop')
+timer = threading.Timer(2, rescue)
+timer.daemon = True
+timer.start()
+try:
+    result = agent.run_conversation('Keep working')
+    assert not rescued.is_set(), 'deadline failed to cancel a legacy subclass'
+    assert result.get('failed') and not result.get('completed'), result
+    assert result.get('failure_reason') == 'run_budget_exhausted', result
+finally:
+    timer.cancel()
+    timer.join()
+    agent.close()
+'''
+    with provider_fixture('busy') as (url, observations, cancelled):
+        env = {'PATH': os.environ['PATH'], 'HOME': str(tmp_path), 'HERMES_HOME': str(home),
+               'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}
+        result = subprocess.run([sys.executable, '-c', script, url], cwd=tmp_path, env=env,
+                                text=True, capture_output=True, timeout=8)
+        assert cancelled.wait(3), result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(observations) == 1
