@@ -92,13 +92,15 @@ class InterruptControlMixin:
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
         tool_reason: Optional[str] = None, require_generation: Optional[int] = None,
+        unless_interrupted: bool = False,
     ) -> bool:
         """Request the agent to interrupt its current tool-calling loop (call from another thread).
 
         ``hard_cancel``: explicit stop; compression may honor it even while ordinary interrupts are masked.
         ``tool_reason``: trusted fixed category safe for tool output. ``require_generation``: activity-
         generation claim — published only if the turn's generation still matches at the final mutation edge;
-        returns False if the turn resumed meanwhile.
+        returns False if the turn resumed meanwhile. ``unless_interrupted`` preserves an existing
+        stop; a pending redirect can still be superseded by the same turn's hard deadline.
         """
         if require_generation is not None:
             # RESERVE the claim under the SAME lock `_touch_activity` stamps with; real progress invalidates
@@ -131,6 +133,11 @@ class InterruptControlMixin:
         # claim edge (redirect lock still held); the destructive pending-commit cancel runs AFTER the claim
         # survives (#99758 P1).
         with _ic_lock(self, "_pending_redirect_lock"):
+            if (
+                unless_interrupted and self._interrupt_requested
+                and not _ic_slot(self, "_pending_redirect_lock", "_pending_redirect")
+            ):
+                return False
             _fence_cancel_before_commit(
                 _fence(), when_in_flight=True, failure_log="Compression hard-cancel fence wait failed"
             )
@@ -193,10 +200,14 @@ class InterruptControlMixin:
         override interrupt(message=None) without hard_cancel."""
         InterruptControlMixin.interrupt(self, message, hard_cancel=True, tool_reason=tool_reason)
 
-    def clear_interrupt(self, *, preserve_redirect: bool = False) -> bool:
+    def clear_interrupt(self, *, preserve_redirect: bool = False, expected_message: Optional[str] = None) -> bool:
         """Clear the interrupt request and per-thread tool signal. ``preserve_redirect`` is only for the
-        conversation loop rebuilding the same logical turn after cancelling a model request."""
+        conversation loop rebuilding the same logical turn after cancelling a model request.
+        ``expected_message`` clears only that exact publication, preserving later external requests."""
         with _ic_lock(self, "_pending_redirect_lock"):
+            # A joined turn deadline may clear only its own publication. A later stop or redirect wins.
+            if expected_message is not None and self._interrupt_message is not expected_message:
+                return False
             if preserve_redirect and not _ic_slot(self, "_pending_redirect_lock", "_pending_redirect"):
                 return False
             self._interrupt_requested = False
@@ -204,13 +215,14 @@ class InterruptControlMixin:
             getattr(self, "_hard_interrupt_requested", threading.Event()).clear()
             if not preserve_redirect:
                 self._pending_redirect = None
-        self._interrupt_thread_signal_pending = False
-        if self._execution_thread_id is not None:
-            _set_interrupt(False, self._execution_thread_id)
-        _ic_signal_tool_workers(self, False)
+            self._interrupt_thread_signal_pending = False
+            if self._execution_thread_id is not None:
+                _set_interrupt(False, self._execution_thread_id)
+            _ic_signal_tool_workers(self, False)
         # A hard interrupt supersedes any pending /steer — its target iteration will no longer happen.
-        with _ic_lock(self, "_pending_steer_lock"):
-            self._pending_steer = None
+        if expected_message is None:
+            with _ic_lock(self, "_pending_steer_lock"):
+                self._pending_steer = None
         return True
 
     def steer(self, text: str) -> bool:

@@ -539,6 +539,7 @@ class CLIChatTurnMixin:
         _interrupted_this_turn = bool(turn.result and turn.result.get("interrupted"))
         # Post-turn hooks (e.g. goal continuation) skip themselves on a user-cancelled turn.
         self._last_turn_interrupted = _interrupted_this_turn
+        self._last_turn_failed = bool(turn.result and turn.result.get("failed"))
         if _interrupted_this_turn:
             pending_message = turn.result.get("interrupt_message") or interrupt_msg
             _show_interrupt_marker = bool(response and pending_message)

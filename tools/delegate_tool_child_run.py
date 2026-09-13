@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import contextvars
+import contextlib
 import json
 import threading
 import time
@@ -62,7 +63,19 @@ def _with_children_lock(parent_agent: Any, op: str, child: Any) -> None:
 def _attach_child(parent_agent: Any, child: Any) -> None:
     """Register the child for parent interrupt propagation."""
     if hasattr(parent_agent, "_active_children"):
-        _with_children_lock(parent_agent, "append", child)
+        lock = getattr(parent_agent, "_active_children_lock", None)
+        with lock if lock is not None else contextlib.nullcontext():
+            parent_agent._active_children.append(child)
+            # Cancellation may have snapshotted the children while this child was constructing.
+            # Checking under the same lock closes that gap before the child can be submitted.
+            if getattr(parent_agent, "_interrupt_requested", False):
+                message = getattr(parent_agent, "_interrupt_message", None)
+                hard = getattr(parent_agent, "_hard_interrupt_requested", None)
+                if hard is not None and hard.is_set():
+                    request_hard_interrupt(child, message,
+                                           tool_reason=getattr(parent_agent, "_tool_interrupt_reason", None))
+                else:
+                    child.interrupt(message)
 
 def _detach_child(parent_agent: Any, child: Any) -> None:
     """Remove the child from parent interrupt propagation (no-op if absent)."""
